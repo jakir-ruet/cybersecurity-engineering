@@ -60,3 +60,28 @@ Bits
 ```
 
 ![Encapsulation](/img/Encapsulation-osi-tcp.png)
+
+![TCP-IP](/img/tcp-ip.png)
+
+### OSI vs TCP/IP — practical comparison
+
+| Area              | OSI                        | TCP/IP                          |
+| ----------------- | -------------------------- | ------------------------------- |
+| Purpose           | Reference/analytical model | Practical protocol architecture |
+| Layers            | 7                          | 4 or commonly taught as 5       |
+| Origin            | ISO                        | DARPA/Internet architecture     |
+| Application       | Separate                   | Combined upper layers           |
+| Presentation      | Separate                   | Usually part of Application     |
+| Session           | Separate                   | Usually part of Application     |
+| Transport         | Yes                        | Yes                             |
+| Network/Internet  | Yes                        | Yes                             |
+| Data Link         | Yes                        | Yes in 5-layer representation   |
+| Physical          | Yes                        | Yes in 5-layer representation   |
+| Real Internet     | Conceptual framework       | Core protocol architecture      |
+| Troubleshooting   | Excellent                  | Excellent                       |
+| Security analysis | Excellent                  | Excellent                       |
+| Packet analysis   | Useful                     | Very practical                  |
+| Cloud networking  | Conceptual mapping         | Primary operational model       |
+| Linux networking  | Conceptual mapping         | Primary operational model       |
+
+> DARPA stands for Defense Advanced Research Projects Agency.
