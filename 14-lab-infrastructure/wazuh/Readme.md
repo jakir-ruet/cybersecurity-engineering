@@ -400,6 +400,367 @@ sudo systemctl status wazuh-manager --no-pager
 sudo /var/ossec/bin/agent_control -l
 ```
 
+## ELK-Server Machine
+
+Target architecture
+
+```bash
+                 CYBERSECURITY LAB NETWORK
+                      192.168.56.0/24
+
+  Windows Endpoint                          ELK Server
+  192.168.56.50                             192.168.56.40
+  ┌──────────────────┐                      ┌────────────────────┐
+  │ Windows Server   │                      │ Elasticsearch      │
+  │                  │                      │ Index and search   │
+  │ OpenEDR           │                      │        ▲           │
+  │      │            │                      │        │           │
+  │ Filebeat           │── TCP 5044 ────────►│ Logstash            │
+  └──────────────────┘                      │        │           │
+                                            │        ▼           │
+                                            │ Elasticsearch      │
+                                            │        │           │
+                                            │        ▼           │
+                                            │ Kibana             │
+                                            └─────────┬──────────┘
+                                                      │
+                                                TCP 5601 or 443*
+                                                      │
+                                                 Web Browser
+```
+
+Target VM specifications
+
+| Component         | Target configuration                                           |
+| ----------------- | -------------------------------------------------------------- |
+| VM name           | `elk-server`                                                   |
+| Operating system  | Ubuntu Server 24.04 LTS                                        |
+| Host-only IP      | `192.168.56.40/24`                                             |
+| Network adapter 1 | NAT — Internet access                                          |
+| Network adapter 2 | Host-only — `vboxnet0`                                         |
+| vCPU              | 2–4                                                            |
+| RAM               | 6–8 GB                                                         |
+| Virtual disk      | 60 GB minimum; 80 GB preferred                                 |
+| Software          | Elasticsearch, Logstash, Kibana                                |
+| Primary purpose   | Centralized log ingestion, indexing, search, and visualization |
+
+```bash
+hostname
+cat /etc/os-release
+nproc
+free -h
+lsblk
+df -h /
+ip -br addr
+ip route
+```
+
+Installation plan
+
+| Phase | Task                                | Result                              |
+| ----- | ----------------------------------- | ----------------------------------- |
+| 1     | Verify VM resources and disk        | Ready host                          |
+| 2     | Verify NAT and host-only networking | Correct IP and connectivity         |
+| 3     | Install Elasticsearch               | Search and indexing engine          |
+| 4     | Install Kibana                      | Web-based log analysis              |
+| 5     | Install Logstash                    | Log ingestion on TCP 5044           |
+| 6     | Configure security and firewall     | Restricted lab access               |
+| 7     | Configure Windows Filebeat          | Endpoint telemetry forwarding       |
+| 8     | Test ingestion                      | Windows events searchable in Kibana |
+
+```bash
+sudo apt update
+sudo apt upgrade -y
+sudo apt install -y curl wget gnupg apt-transport-https
+curl -I https://artifacts.elastic.co
+```
+
+```bash
+df -h /
+free -h
+```
+
+```bash
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch |
+  sudo gpg --dearmor -o /etc/apt/keyrings/elasticsearch.gpg
+sudo chmod 644 /etc/apt/keyrings/elasticsearch.gpg
+echo "deb [signed-by=/etc/apt/keyrings/elasticsearch.gpg] https://artifacts.elastic.co/packages/9.x/apt stable main" |
+  sudo tee /etc/apt/sources.list.d/elastic-9.x.list
+```
+
+```bash
+sudo apt update
+sudo apt install -y elasticsearch
+sudo systemctl daemon-reload
+sudo systemctl enable --now elasticsearch
+sudo systemctl status elasticsearch --no-pager
+```
+
+```bash
+sudo ss -lntp | grep -E ':9200|:9300'
+sudo ls -l /etc/elasticsearch/certs/http_ca.crt
+sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u elastic
+```
+
+```bash
+sudo cp /etc/elasticsearch/certs/http_ca.crt ~/http_ca.crt
+sudo chown "$USER":"$(id -gn)" ~/http_ca.crt
+chmod 600 ~/http_ca.crt
+```
+
+```bash
+ls -l ~/http_ca.crt
+curl --cacert ~/http_ca.crt -u elastic https://localhost:9200
+```
+
+> Ask here password of `elastic`
+
+```bash
+curl --cacert /etc/elasticsearch/certs/http_ca.crt \
+  -u elastic https://localhost:9200
+```
+
+```bash
+https://192.168.56.40:9200/ # Test on browser
+```
+
+### Install Kibana
+
+```bash
+sudo apt install -y kibana
+sudo systemctl daemon-reload
+sudo systemctl enable kibana
+```
+
+```bash
+sudo /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s kibana
+# Copy the token temporarily into a secure location. Do not share it here; it is a credential.
+sudo /usr/share/kibana/bin/kibana-setup
+# Paste the Token
+sudo systemctl start kibana
+sudo systemctl status kibana --no-pager
+sudo ss -lntp | grep ':5601'
+```
+
+```bash
+sudo cp /etc/kibana/kibana.yml /etc/kibana/kibana.yml.backup
+sudo vi /etc/kibana/kibana.yml
+```
+
+> #server.host: "localhost" to server.host: "192.168.56.40"
+
+```bash
+sudo systemctl restart kibana
+```
+
+```bash
+sudo ss -lntp | grep ':5601'
+sudo ufw status verbose
+sudo ufw allow from 192.168.56.0/24 to any port 5601 proto tcp
+```
+
+```bash
+http://192.168.56.40:5601
+```
+
+> Username: `elastic` Password: `v4f6tPfnZC1xmCuotKhx`
+
+### Logstash
+
+Logstash is a server-side data processing pipeline that ingests, transforms, enriches, and forwards data to a destination. It is one of the components of the Elastic Stack:
+
+- Elasticsearch — stores, indexes, and searches data.
+- Logstash — processes and routes incoming data.
+- Kibana — provides visualization, search, dashboards, and investigation tools.
+- Beats — lightweight agents that collect and forward data from endpoints.
+
+For your cybersecurity lab, Logstash will process security events collected from Windows and other systems before sending them to Elasticsearch.
+
+Suppose your Windows endpoint records this event:
+
+```text
+2026-10-11 15:30:22
+Host: WIN-ENDPOINT
+Event: Failed login
+Username: administrator
+Source IP: 192.168.56.30
+```
+
+Logstash can transform this raw event into structured fields:
+
+```json
+{
+  "@timestamp": "2026-10-11T09:30:22Z",
+  "host": {
+    "name": "WIN-ENDPOINT"
+  },
+  "event": {
+    "category": ["authentication"],
+    "action": "login",
+    "outcome": "failure"
+  },
+  "user": {
+    "name": "administrator"
+  },
+  "source": {
+    "ip": "192.168.56.30"
+  }
+}
+```
+
+**Where does Logstash fit in the architecture?** Consider the following data pipeline
+
+```text
+                    DATA SOURCES
+           ┌────────────┬─────────────┐
+           │            │             │
+       Windows        Linux        Network
+       Endpoint       Server        Devices
+           │            │             │
+           └────────────┼─────────────┘
+                        ▼
+                DATA COLLECTION
+              Filebeat / Other Agents
+                        │
+                        ▼
+                ┌───────────────┐
+                │   LOGSTASH    │
+                │               │
+                │ 1. Input      │
+                │ 2. Filter     │
+                │ 3. Output     │
+                └───────┬───────┘
+                        │
+                        ▼
+                ┌───────────────┐
+                │ ELASTICSEARCH │
+                │               │
+                │ Store         │
+                │ Index         │
+                │ Search        │
+                └───────┬───────┘
+                        │
+                        ▼
+                ┌───────────────┐
+                │    KIBANA     │
+                │               │
+                │ Search        │
+                │ Dashboards    │
+                │ Investigation │
+                └───────────────┘
+```
+
+Responsibilities of each component
+
+| Component     | Responsibility                                  | Example                                     |
+| ------------- | ----------------------------------------------- | ------------------------------------------- |
+| Filebeat      | Collects and forwards log events                | Reads Windows event files                   |
+| Logstash      | Parses, transforms, enriches, and routes events | Extracts IP addresses and normalizes fields |
+| Elasticsearch | Stores and indexes events                       | Makes events searchable                     |
+| Kibana        | Visualizes and investigates events              | Displays failed-login trends                |
+
+**How does Logstash work?** A Logstash pipeline has three main stages:
+
+```text
+Input → Filter → Output
+```
+
+**Input — Receive Data** The input stage defines where Logstash receives data. Common input plugins include:
+
+- Beats: Receives events from Filebeat.
+- TCP/UDP: Receives data over network connections.
+- File: Reads data from files.
+- Syslog: Receives syslog messages.
+- HTTP: Receives data through HTTP requests.
+
+In our lab: Filebeat on the Windows endpoint sends events to Logstash over TCP port 5044.
+
+```text
+Windows Endpoint
+     │
+  Filebeat
+     │
+     │ TCP 5044
+     ▼
+Logstash Input
+```
+
+**Filter — Process Data** The filter stage parses, transforms, or enriches incoming events.
+
+| Filter   | Function                                                |
+| -------- | ------------------------------------------------------- |
+| `grok`   | Extracts fields from unstructured text                  |
+| `date`   | Parses timestamps                                       |
+| `mutate` | Modifies or converts fields                             |
+| `geoip`  | Adds geographical information to supported IP addresses |
+| `json`   | Parses JSON data                                        |
+| `drop`   | Discards selected events                                |
+
+Example: Suppose Logstash receives this message
+
+```text
+Failed login for administrator from 192.168.56.30
+```
+
+A Grok filter can extract the username and source IP
+
+```text
+Raw Message
+     │
+     ▼
+Grok Filter
+     │
+     ├── username: administrator
+     └── source_ip: 192.168.56.30
+```
+
+**Output — Send Data** The output stage determines where processed events are sent.
+Common destinations include Elasticsearch, files, and standard output.
+
+In our lab: Logstash sends processed events to Elasticsearch over authenticated HTTPS.
+
+```text
+Logstash
+    │
+    │ HTTPS + Authentication
+    ▼
+Elasticsearch
+192.168.56.40:9200
+    │
+    ▼
+Kibana
+```
+
+Because Elasticsearch security is enabled, Logstash must authenticate and validate the Elasticsearch TLS certificate
+
+| Stage      | Purpose                    | Our Lab                               |
+| ---------- | -------------------------- | ------------------------------------- |
+| **Input**  | Receives data              | Filebeat on TCP `5044`                |
+| **Filter** | Parses and transforms data | Extracts security-event fields        |
+| **Output** | Sends processed data       | Elasticsearch on `192.168.56.40:9200` |
+
+Logstash versus Filebeat
+
+| Feature                       | Filebeat                                                  | Logstash                                       |
+| ----------------------------- | --------------------------------------------------------- | ---------------------------------------------- |
+| Primary role                  | Log collection and forwarding                             | Data processing and routing                    |
+| Typical deployment            | On endpoints or servers                                   | Centralized processing server                  |
+| Resource consumption          | Generally lightweight                                     | Usually higher                                 |
+| Parsing and transformation    | Supports processors and basic transformations             | Supports extensive processing through plugins  |
+| Data enrichment               | Supports selected processors                              | Supports many enrichment plugins               |
+| Output                        | Elasticsearch, Logstash, and other supported destinations | Elasticsearch and other supported destinations |
+| Required in every deployment? | Depends on collection architecture                        | No                                             |
+
+For your environment, the intended division of responsibility is:
+
+- Windows endpoint: collect and forward events.
+- Logstash: process incoming events.
+- Elasticsearch: index and store events.
+- Kibana: search and visualize events.
+
+One important design consideration: Filebeat is primarily designed for log files and supported event sources. If you want native Windows Event Log collection, Winlogbeat or Elastic Agent is generally a more direct choice. We should confirm how your OpenEDR events are produced before deciding which collector is appropriate.
+
 ## Kali Server - Attacker
 
 ### Network verification
