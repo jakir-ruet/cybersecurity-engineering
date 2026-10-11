@@ -37,39 +37,99 @@ We will organize the course into 15 modules. Each module will contain theory, ar
 
 ### Design our hands-on Wazuh lab
 
+| VM              | Host-only IP    | vCPU |    RAM | Virtual Disk | Purpose                                               |
+| --------------- | --------------- | ---: | -----: | -----------: | ----------------------------------------------------- |
+| `wazuh-server`  | `192.168.56.10` |    4 | 4–8 GB |     50–80 GB | All-in-one Wazuh SIEM/XDR                             |
+| `ubn-endpoint`  | `192.168.56.20` |    2 | 2–4 GB |        30 GB | Linux endpoint monitoring                             |
+| `kali-attacker` | `192.168.56.30` |    2 | 2–4 GB |        30 GB | Authorized security testing                           |
+| `elk-server`    | `192.168.56.40` |  2–4 | 6–8 GB |     60–80 GB | Elasticsearch, Logstash, and Kibana                   |
+| `win-endpoint`  | `192.168.56.50` |    2 |   4 GB |     50–80 GB | Windows endpoint monitoring with OpenEDR and Filebeat |
+
 ```bash
-                 YOUR PHYSICAL COMPUTER
+                   PHYSICAL COMPUTER
                       Ubuntu 24.04
-                            |
+                           |
                        VirtualBox
-                            |
-              +-------------+-------------+
-              |                           |
-          NAT Network                Host-only Network
-          Internet access            Isolated lab access
-              |                           |
-        +-----+---------------------------+------+
-        |                 |                      |
-        v                 v                      v
- +-------------+   +---------------+   +----------------+
- | Wazuh Server|   | Ubuntu Target |   |  Kali Linux    |
- |             |   |               |   |                |
- | Wazuh       |   | Wazuh Agent   |   | Wazuh Agent    |
- | Manager     |   | SSH           |   | Security tools |
- | Indexer     |   | System logs   |   | Test activity  |
- | Dashboard   |   | FIM            |   |               |
- +-------------+   +---------------+   +----------------+
+                           |
+              +------------+------------+
+              |                         |
+              v                         v
+       NAT NETWORK               HOST-ONLY NETWORK
+       Internet Access           192.168.56.0/24
+              |                  Isolated Lab Network
+              |                         |
+              +-------------------------+
+                                        |
+       +----------------+---------------+----------------+----------------+
+       |                |               |                |                |
+       v                v               v                v                v
++---------------+ +--------------+ +--------------+ +--------------+ +--------------+
+| Wazuh Server  | | Ubuntu       | | Kali Linux   | | ELK Server   | | Windows      |
+|               | | Endpoint     | |              | |              | | Endpoint     |
+| 192.168.56.10 | | .20          | | .30          | | .40          | | .50          |
+|               | |              | |              | |              | |              |
+| Wazuh Manager | | Wazuh Agent  | | Security     | | Logstash     | | OpenEDR      |
+| Wazuh Indexer | | SSH          | | Tools        | | Elasticsearch| | Filebeat     |
+| Dashboard     | | System Logs  | | Test Activity| | Kibana       | | Telemetry    |
+|               | | File Integrity| |              | |              | |              |
++-------+-------+ +--------------+ +--------------+ +--------------+ +--------------+
         |
         v
-  Security Dashboard
-  Alerts and Investigation
++----------------------+
+| Wazuh Security       |
+| Dashboard            |
+|                      |
+| Alerts, Monitoring,  |
+| and Investigation    |
++----------------------+
 ```
 
-| VM              | vCPU |    RAM |  Storage | Purpose                     |
-| --------------- | ---: | -----: | -------: | --------------------------- |
-| `wazuh-server`  |    4 |   8 GB | 50–80 GB | All-in-one Wazuh deployment |
-| `ubuntu-target` |    2 | 2–4 GB |    25 GB | Linux endpoint monitoring   |
-| `kali-attacker` |    2 | 2–4 GB |    25 GB | Controlled security testing |
+**Note** The diagram assumes that each VM has a host-only interface on `192.168.56.0/24`. Configure NAT separately on VMs that need Internet access. NAT alone does not automatically create a shared network between all VMs.
+
+**OpenEDR-to-ELK data flow** The Windows endpoint will send OpenEDR telemetry to the ELK server through Filebeat and Logstash.
+
+```text
++--------------------------------+
+| Windows Endpoint               |
+| 192.168.56.50                  |
+|                                |
+|  +--------------------------+  |
+|  | OpenEDR Agent            |  |
+|  +------------+-------------+  |
+|               |                |
+|               v                |
+|  +--------------------------+  |
+|  | OpenEDR Telemetry Files  |  |
+|  +------------+-------------+  |
+|               |                |
+|               v                |
+|  +--------------------------+  |
+|  | Filebeat                 |  |
+|  +------------+-------------+  |
++---------------|----------------+
+                |
+                | TCP 5044
+                v
++--------------------------------+
+| ELK Server                     |
+| 192.168.56.40                  |
+|                                |
+|  +--------------------------+  |
+|  | Logstash                 |  |
+|  +------------+-------------+  |
+|               |                |
+|               v                |
+|  +--------------------------+  |
+|  | Elasticsearch            |  |
+|  +------------+-------------+  |
+|               |                |
+|               v                |
+|  +--------------------------+  |
+|  | Kibana                   |  |
+|  | Search and Analysis      |  |
+|  +--------------------------+  |
++--------------------------------+
+```
 
 ### Lab Setup
 
@@ -79,9 +139,40 @@ Step 1: Create and Configure
 ip -br addr show vboxnet0
 ```
 
-**Adapter 2 as Host-only Adapter** on all three VMs. Then start the VMs and run.
+Add Adapter 2 as **Host-only Adapter** on all three VMs. Then start the VMs and run.
 
-For **Wazuh Server** & **Ubuntu Target**, remember you should change **IP Address**
+Step 2: Create medias in Virtual Box
+
+```bash
+VBoxManage clonemedium disk \
+  "/media/jakir/Resources/ubuntu-server.vdi" \
+  "/media/jakir/Resources/iso/vdi/wazuh-server.vdi" \
+  --format VDI
+```
+
+```bash
+VBoxManage clonemedium disk \
+  "/media/jakir/Resources/ubuntu-server.vdi" \
+  "/media/jakir/Resources/iso/vdi/ubn-endpoint.vdi" \
+  --format VDI
+```
+
+```bash
+VBoxManage clonemedium disk \
+  "/media/jakir/Resources/ubuntu-server.vdi" \
+  "/media/jakir/Resources/iso/vdi/elk-server.vdi" \
+  --format VDI
+```
+
+Step 3: Create Install and COnfigure VM
+
+1. Create `wazuh-server` VM using `wazuh-server.vdi`
+2. Create `ubn-endpoint` VM using `ubn-endpoint.vdi`
+3. Create `kali-attacker` VM using `kali-linux-2026.2-installer-amd64.iso`
+4. Create `elk-server` VM using `elk-server.vdi`
+5. Create `win-endpoint` VM using `Windows 10 English x64.iso`
+
+For **wazuh-server**, **ubn-endpoint** & **elk-server**, remember you should change **IP Address**
 
 ```bash
 ip -br addr
@@ -178,42 +269,16 @@ ip -br addr
 ip route
 ```
 
-> - **For**
-> - Wazuh Server (192.168.56.10/24)
-> - Ubuntu Server (192.168.56.20/24)
-> - Kali Server (192.168.56.30/24)
-
-```bash
-                  VirtualBox Lab
-                        |
-            Host-only Network
-             192.168.56.1/24
-                        |
-          +-------------+-------------+
-          |             |             |
-          v             v             v
-    Wazuh Server   Ubuntu Target   Kali Linux
-    .56.10         .56.20          .56.30
-          |             |             |
-          |        Wazuh Agent   Wazuh Agent
-          |             |             |
-          +-------------+-------------+
-                        |
-                 Security Events
-                        |
-                 Wazuh Dashboard
-                        |
-                 Alert Investigation
-```
-
 ### Final Host-only network status
 
 | System        | Interface  | Private IP      |
 | ------------- | ---------- | --------------- |
 | Ubuntu host   | `vboxnet0` | `192.168.56.1`  |
-| Wazuh server  | `enp0s8`   | `192.168.56.10` |
-| Ubuntu Target | `enp0s8`   | `192.168.56.20` |
-| Kali Linux    | `eth1`     | `192.168.56.30` |
+| wazuh-server  | `enp0s8`   | `192.168.56.10` |
+| ubn-endpoint  | `enp0s8`   | `192.168.56.20` |
+| kali-attacker | `eth1`     | `192.168.56.30` |
+| elk-server    | `eth1`     | `192.168.56.40` |
+| win-endpoint  | `eth1`     | `192.168.56.50` |
 
 | Property                        | Value             | Status  |
 | ------------------------------- | ----------------- | ------- |
@@ -252,10 +317,20 @@ sudo bash ./wazuh-install.sh -a
 ```
 
 ```bash
+sudo systemctl status wazuh-indexer --no-pager
+sudo systemctl status wazuh-manager --no-pager
+sudo systemctl status wazuh-dashboard --no-pager
+sudo ss -lntp | grep -E ':443|:5601'
+curl -k -I https://localhost
+sudo ufw status verbose
+sudo ufw allow from 192.168.56.0/24 to any port 443 proto tcp
+```
+
+```bash
 https://192.168.56.10
 ```
 
-## Ubuntu Target Machine
+## Ubn-Endpoint Machine
 
 ```bash
 sudo apt update
@@ -264,11 +339,9 @@ sudo apt install -y curl gnupg
 
 ```bash
 sudo install -m 0755 -d /etc/apt/keyrings
-
 curl -fsSL https://packages.wazuh.com/key/GPG-KEY-WAZUH \
   | sudo gpg --dearmor --yes \
       -o /etc/apt/keyrings/wazuh.gpg
-
 sudo chmod 644 /etc/apt/keyrings/wazuh.gpg
 ```
 
@@ -306,6 +379,10 @@ sudo grep -n -A 6 '<client>' /var/ossec/etc/ossec.conf
 > Need to replace `MANAGER_IP` to `SERVER_IP` (192.168.56.10).
 
 ```bash
+wget https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.14.8-1_amd64.deb && sudo WAZUH_MANAGER='192.168.56.10' WAZUH_AGENT_NAME='ubn-endpoint' dpkg -i ./wazuh-agent_4.14.8-1_amd64.deb
+```
+
+```bash
 sudo systemctl daemon-reload
 sudo systemctl enable wazuh-agent
 sudo systemctl start wazuh-agent
@@ -334,6 +411,106 @@ ping -c 4 192.168.56.10
 ping -c 4 192.168.56.20
 ping -c 4 8.8.8.8
 ```
+
+### Open-source Endpoint Detection and Response - OpenEDR
+
+Its endpoint security software designed to monitor endpoint activity and provide security telemetry for investigation.
+In your lab, OpenEDR runs on the Windows endpoint. Its role includes:
+
+- Monitoring endpoint activity.
+- Generating security telemetry.
+- Recording events that can help with threat investigation.
+- Supporting endpoint detection and response workflows.
+
+### ELK Stack
+
+Its a collection of three open-source data processing and analytics components: `Elasticsearch`, `Logstash`, and `Kibana`. It is used to `collect`, `process`, `store`, `search`, `analyze`, and `visualize data`, including `application logs`, `infrastructure logs`, and `security events`.
+
+| Component         | Function                                                      |
+| ----------------- | ------------------------------------------------------------- |
+| **Elasticsearch** | Stores, indexes, and searches security events.                |
+| **Logstash**      | Receives, processes, and transforms incoming events.          |
+| **Kibana**        | Provides dashboards, visualizations, and investigation tools. |
+
+**Architecture for your cybersecurity lab** Using your configured IP addresses
+
+```bash
+┌────────────────────────────────────────────┐
+│ WINDOWS ENDPOINT                            │
+│ IP: 192.168.56.50                           │
+│                                            │
+│  ┌──────────────────┐                      │
+│  │ OpenEDR Agent    │                      │
+│  └────────┬─────────┘                      │
+│           │                                │
+│           ▼                                │
+│  ┌──────────────────┐                      │
+│  │ Telemetry Files  │                      │
+│  └────────┬─────────┘                      │
+│           │                                │
+│           ▼                                │
+│  ┌──────────────────┐                      │
+│  │ Filebeat         │                      │
+│  └────────┬─────────┘                      │
+└───────────┼────────────────────────────────┘
+            │
+            │ TCP 5044
+            ▼
+┌────────────────────────────────────────────┐
+│ ELK SERVER                                  │
+│ IP: 192.168.56.40                           │
+│                                            │
+│  ┌──────────────────┐                      │
+│  │ Logstash         │                      │
+│  └────────┬─────────┘                      │
+│           │                                │
+│           ▼                                │
+│  ┌──────────────────┐                      │
+│  │ Elasticsearch    │                      │
+│  └────────┬─────────┘                      │
+│           │                                │
+│           ▼                                │
+│  ┌──────────────────┐                      │
+│  │ Kibana           │                      │
+│  │ Dashboards       │                      │
+│  │ Event Search     │                      │
+│  └──────────────────┘                      │
+└────────────────────────────────────────────┘
+```
+
+**Investigating suspicious activity** Suppose a process executes on your Windows endpoint.
+
+| Step | Component     | Activity                                                                                   |
+| ---- | ------------- | ------------------------------------------------------------------------------------------ |
+| 1    | Windows       | A process executes.                                                                        |
+| 2    | OpenEDR       | Monitors the activity and generates relevant telemetry, if supported by its configuration. |
+| 3    | Filebeat      | Reads the telemetry from the configured output files.                                      |
+| 4    | Logstash      | Receives and processes the event.                                                          |
+| 5    | Elasticsearch | Indexes the event for searching.                                                           |
+| 6    | Kibana        | Allows an analyst to search and investigate the event.                                     |
+
+**OpenEDR + ELK versus Wazuh** Since your lab already includes Wazuh, it is useful to understand the difference.
+
+| Capability                     | OpenEDR + ELK                                  | Wazuh                                             |
+| ------------------------------ | ---------------------------------------------- | ------------------------------------------------- |
+| Endpoint monitoring            | OpenEDR provides endpoint telemetry            | Wazuh agents collect endpoint security data       |
+| Log collection                 | Filebeat can forward OpenEDR telemetry         | Wazuh agents send collected data to the manager   |
+| Centralized storage and search | Elasticsearch                                  | Wazuh indexer                                     |
+| Security visualization         | Kibana                                         | Wazuh dashboard                                   |
+| Primary learning objective     | Endpoint telemetry ingestion and investigation | SIEM, endpoint monitoring, and security detection |
+
+**Implementation plan for your lab**
+
+| Phase | Task                                                  | VM             |
+| ----- | ----------------------------------------------------- | -------------- |
+| 1     | Verify the virtual disk and Ubuntu filesystem         | `elk-server`   |
+| 2     | Install Elasticsearch                                 | `elk-server`   |
+| 3     | Install Logstash                                      | `elk-server`   |
+| 4     | Install Kibana                                        | `elk-server`   |
+| 5     | Install OpenEDR                                       | `win-endpoint` |
+| 6     | Install and configure Filebeat                        | `win-endpoint` |
+| 7     | Configure the Logstash input and Elasticsearch output | `elk-server`   |
+| 8     | Validate telemetry ingestion and investigate events   | Both           |
 
 ### Install the Wazuh agent
 
